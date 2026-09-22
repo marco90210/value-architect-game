@@ -1,0 +1,167 @@
+import streamlit as st
+import pandas as pd
+
+# Configuração inicial da página
+st.set_page_config(page_title="Value Architect", page_icon="🏢", layout="centered")
+
+# Inicializando variáveis de estado (Session State)
+if 'fase' not in st.session_state:
+    st.session_state.fase = 1
+    st.session_state.score_f1 = 100
+    st.session_state.card_idx = 0
+    st.session_state.wacc = 0.0
+    st.session_state.fcff_1 = 0.0
+    st.session_state.g = 0.0
+    st.session_state.ev = 0.0
+
+# Dados da Fase 1
+cards_fase1 = [
+    {"evento": "Emissão de nova dívida ($50M)", "resposta": "FCFE"},
+    {"evento": "Compra de novos maquinários (CapEx)", "resposta": "Ambos"},
+    {"evento": "Pagamento de Juros (Despesa Financeira)", "resposta": "FCFE"},
+    {"evento": "Aumento de Capital Próprio", "resposta": "FCFE"},
+    {"evento": "Variação do Capital de Giro (NWC)", "resposta": "Ambos"}
+]
+
+st.title("🏢 Value Architect")
+st.markdown("Assuma a cadeira de CFO e tome as decisões corretas para criar o próximo **Unicórnio**.")
+st.divider()
+
+# ==========================================
+# FASE 1: O FILTRO DE CAIXA
+# ==========================================
+if st.session_state.fase == 1:
+    st.header("Fase 1: O Filtro de Caixa")
+    st.write("Identifique se o evento afeta apenas o **FCFE** (Free Cash Flow to Equity) ou **Ambos** (FCFF e FCFE).")
+    
+    st.metric("Confiança do Mercado (Pontos)", st.session_state.score_f1)
+    
+    if st.session_state.card_idx < len(cards_fase1):
+        card_atual = cards_fase1[st.session_state.card_idx]
+        
+        st.info(f"**Evento:** {card_atual['evento']}")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Apenas FCFE"):
+                if card_atual['resposta'] == "FCFE":
+                    st.success("Correto!")
+                else:
+                    st.error("Incorreto! Custo de 10 pontos.")
+                    st.session_state.score_f1 -= 10
+                st.session_state.card_idx += 1
+                st.rerun()
+                
+        with col2:
+            if st.button("Ambos (FCFF e FCFE)"):
+                if card_atual['resposta'] == "Ambos":
+                    st.success("Correto!")
+                else:
+                    st.error("Incorreto! Custo de 10 pontos.")
+                    st.session_state.score_f1 -= 10
+                st.session_state.card_idx += 1
+                st.rerun()
+    else:
+        st.success("Fase 1 Concluída!")
+        if st.button("Ir para a Fase 2"):
+            st.session_state.fase = 2
+            st.rerun()
+
+# ==========================================
+# FASE 2: A BALANÇA DO RISCO (WACC)
+# ==========================================
+elif st.session_state.fase == 2:
+    st.header("Fase 2: A Estrutura de Capital")
+    st.write("Ajuste a alavancagem para encontrar o menor WACC possível.")
+    
+    # Sliders interativos
+    wd = st.slider("Percentual de Dívida (Debt %)", 0, 90, 20, format="%d%%") / 100.0
+    we = 1 - wd
+    
+    # Dinâmica de risco (Custo da dívida e equity sobem com muita alavancagem)
+    tax_rate = 0.34
+    kd_base = 0.08
+    ke_base = 0.12
+    
+    # Penalidade de risco de falência se dívida passar de 40%
+    risco_falencia = max(0, wd - 0.40) ** 2 * 2
+    
+    kd = kd_base + risco_falencia
+    ke = ke_base + (risco_falencia * 1.5)
+    
+    wacc = (we * ke) + (wd * kd * (1 - tax_rate))
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Custo do Equity (Ke)", f"{ke*100:.1f}%")
+    col2.metric("Custo da Dívida (Kd pós-imposto)", f"{kd*(1-tax_rate)*100:.1f}%")
+    col3.metric("WACC", f"{wacc*100:.2f}%", delta_color="inverse")
+    
+    # Gráfico simples para visualização
+    df_chart = pd.DataFrame({"Componente": ["Equity", "Dívida"], "Peso": [we, wd]})
+    st.bar_chart(df_chart.set_index("Componente"))
+    
+    if st.button("Travar Estrutura de Capital"):
+        st.session_state.wacc = wacc
+        st.session_state.fase = 3
+        st.rerun()
+
+# ==========================================
+# FASE 3: O MOTOR DE CRESCIMENTO E VALUATION
+# ==========================================
+elif st.session_state.fase == 3:
+    st.header("Fase 3: Dividendos vs. Reinvestimento")
+    st.write("Decida a política de retenção. Cuidado: o crescimento (g) não pode superar o WACC!")
+    
+    roic = 0.15 # Retorno sobre o capital investido
+    caixa_gerado = 150 # Base de caixa gerado no ano
+    
+    payout = st.slider("Payout Ratio (% de Dividendos distribuídos)", 0, 100, 50, format="%d%%") / 100.0
+    taxa_retencao = 1 - payout
+    
+    # Fórmulas de Valuation
+    g = roic * taxa_retencao
+    fcff_1 = caixa_gerado * payout # Simplificação para o jogo: fluxo livre imediato
+    
+    col1, col2 = st.columns(2)
+    col1.metric("Crescimento na Perpetuidade (g)", f"{g*100:.2f}%")
+    col2.metric("Fluxo de Caixa Ano 1 ($M)", f"${fcff_1:.1f}M")
+    
+    if g >= st.session_state.wacc:
+        st.error("⚠️ ALERTA: A taxa de crescimento (g) está maior ou igual ao WACC. Matematicamente impossível calcular o Terminal Value. Aumente os dividendos!")
+    else:
+        # Cálculo de Perpetuidade: TV = FCFF1 / (WACC - g)
+        enterprise_value = fcff_1 / (st.session_state.wacc - g)
+        
+        st.success("Cálculo validado!")
+        if st.button("Calcular Valuation Final"):
+            st.session_state.ev = enterprise_value
+            st.session_state.g = g
+            st.session_state.fase = 4
+            st.rerun()
+
+# ==========================================
+# RESULTADO FINAL
+# ==========================================
+elif st.session_state.fase == 4:
+    st.balloons()
+    st.header("🏆 Valuation Concluído")
+    
+    ev_final = st.session_state.ev
+    
+    st.metric("Enterprise Value Estimado", f"${ev_final:.1f} Milhões")
+    
+    if ev_final < 500:
+        st.warning("Título: **Estagiário da Faria Lima**")
+        st.write("Sua estrutura de capital não foi eficiente ou seu crescimento (g) foi muito baixo.")
+    elif ev_final < 1000:
+        st.info("Título: **CFO Sênior**")
+        st.write("Bom trabalho! Uma empresa sólida, mas ainda não quebrou a barreira do bilhão.")
+    else:
+        st.success("Título: **UNICÓRNIO! 🦄**")
+        st.write("Você encontrou o WACC mínimo e calibrou perfeitamente o reinvestimento!")
+
+    if st.button("Jogar Novamente"):
+        # Resetando o estado
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
